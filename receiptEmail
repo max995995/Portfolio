@@ -1,0 +1,374 @@
+Public trial1 As String
+Public PatientID1 As String
+Public Ctep As String
+Public cell As Object
+Public ScanText As String
+Public LastPatient As String
+
+Sub RumMerge()
+''Purpose: generate an email with an attached QC report
+' https://www.ozgrid.com/forum/index.php?thread/48727-vba-mailmerge-to-autoselect-sheet-of-table/
+' Note: this code requires a reference to the Word object model to be set, via Tools|References in the VBE.
+
+Dim StrMMSrc As String, StrMMDoc As String, StrName As String
+Dim wdApp As New Word.Application, wdDoc As Word.Document
+Dim aOutlook As Object, aEmail As Object, objItem As MailItem
+Dim doclist()
+Dim trialemail As String, sUser As String, rownum As Integer
+Dim newbook As Workbook, AllContactTrials As Workbook
+ThisWorkbook.Save
+StrMMSrc = ThisWorkbook.FullName
+StrPDFPath = "##DirAccessDenied"
+StrMMDoc = "##DirAccessDenied"
+sUser = Environ("UserName")
+
+Set aOutlook = CreateObject("Outlook.Application")
+Set wdDoc = wdApp.Documents.Open(Filename:=StrMMDoc, AddToRecentFiles:=False, ReadOnly:=False, Visible:=True)
+
+    Slct = MsgBox("Would you like me to select entries for you?", vbQuestion + vbYesNo + vbDefaultButton1, "Send Receipt")
+    If Slct = "yes" Then
+    selectall
+    End If
+    
+    LastPatient = 1
+    trial1 = "Custom"
+    counter = 0
+
+
+
+For Each cell In Range(Selection.Address)
+
+     ThisWorkbook.Activate
+     cell.Activate
+     ContactEmail = ""
+     rownum = cell.Row
+     PatientID1 = Range("G" & rownum).Value
+     Ctep = Range("F" & rownum).Value                                           'establishes search criteria
+     SiteName = Range("E" & rownum).Value
+                                           
+    On Error Resume Next                                                   'if the search returns nothing, don't freak out
+        
+        If PatientID1 = LastPatient Then
+            Set objItem = aOutlook.ActiveInspector.CurrentItem
+            objItem.Delete
+        End If
+        
+        
+        
+    '''''''This fixes a strange issue with the mailmerge of
+    '''''''        IV Contrast Dose and Rate columns. Making them strings.
+    
+        If InStr(Range("AN" & rownum).Formula, "=""") <> 1 Then
+                Range("AN" & rownum).Formula = "=""" & Range("AN" & rownum).Formula & """"
+        End If
+        If InStr(1, Range("AN" & rownum).Formula, "=""") <> 1 Then
+                Range("AN" & rownum).Formula = "=""" & Range("AN" & rownum).Formula & """"
+        End If
+        
+    '''''''This CREATES BOOK
+    '''''''  called newbook
+        If newbook Is Nothing Then                                                  'if "newbook" doesn't exist
+            oldbook = ActiveWorkbook.FullName                                       'first save the Daily as a reference
+            Application.DisplayAlerts = False                                       'Hold still, Excel.
+            Set newbook = Workbooks.Add                                             'I want to make a new workbook
+            newbook.SaveAs Filename:="TemporaryContactInstance.xls"                 '    And save it
+            Application.DisplayAlerts = True                                        'That's a good Excel.
+        
+            '''''''This CREATES CONTACTS
+            '''''''  as a query from the master list                                'This section creates the link
+            ActiveWorkbook.Queries.Add Name:="AllTrialContacts", Formula:= _
+                "let" & Chr(13) & "" & Chr(10) & "    Source = Excel.Workbook(File.Contents(""J:\Data_Management_Special\ContactsAllTrials\SiteContactsDatabase_Master.xlsx"") , null, true)," _
+                & Chr(13) & "" & Chr(10) & "    AllTrialContacts_Sheet = Source{[Item=""AllTrialContacts"", Kind=""Sheet""]}[Data], " _
+                & Chr(13) & "" & Chr(10) & "    #""Promoted Headers"" = Table.PromoteHeaders(AllTrialContacts_Sheet, [PromoteAllScalars=true])," & Chr(13) & "" & Chr(10) & _
+                "    #""Changed Type"" = Table.Tran" & "sformColumnTypes(#""Promoted Headers"",{{""Trial"", type text}, {""Site"", type text}, {""CTEP ID"", type any}, {""Contact First Name"", type text}, {""Contact Last Name"", type text}, {""Email"", type text}, {""Phone Number"", type any}, {""Extension, if any"", type any}, {""Contact Role"", type text}, {""Active ?"", type text}, {""Notes"", type text}, {""PI, if kn" & _
+                "own"", type text}, {""PI Email"", type text}})," & Chr(13) & "" & Chr(10) & _
+                "    #""Filtered Rows"" = Table.SelectRows(#""Changed Type"", each ([Trial] = ""S1806""))" & _
+                Chr(13) & "" & Chr(10) & "in" & Chr(13) & "" & Chr(10) & "    #""Filtered Rows"""
+            
+                                                                                    'This section projects the linked content
+            With ActiveSheet.ListObjects.Add(SourceType:=0, Source:= _
+                "OLEDB;Provider=Microsoft.Mashup.OleDb.1;Data Source=$Workbook$;Location=AllTrialContacts;Extended Properties=""""" _
+                , Destination:=Range("$A$1")).QueryTable
+                .CommandType = xlCmdSql
+                .CommandText = Array("SELECT * FROM [AllTrialContacts]")
+                .RowNumbers = False
+                .FillAdjacentFormulas = False
+                .PreserveFormatting = True
+                .RefreshOnFileOpen = False
+                .BackgroundQuery = True
+                .RefreshStyle = xlInsertDeleteCells
+                .SavePassword = False
+                .SaveData = True
+                .AdjustColumnWidth = True
+                .RefreshPeriod = 0
+                .PreserveColumnInfo = False
+                .ListObject.DisplayName = "AllTrialContacts"
+                .Refresh BackgroundQuery:=False
+            End With
+        End If
+        
+    ThisWorkbook.Activate
+
+    'Create a new Outlook Mail item (a new email)
+    Set aEmail = aOutlook.CreateItem(0)
+    aEmail.HTMLBody = Receipt_Email_Body(cell)
+
+    Set aEmail.SendUsingAccount = AcctNumber("SWOG1806@IROCOhio.org")
+               
+
+         
+ '''''''
+ '''''''Mailmerge Section
+ '''''''
+
+    With wdDoc.MailMerge
+        .MainDocumentType = wdFormLetters
+        .OpenDataSource Name:=StrMMSrc, SQLStatement:="SELECT * FROM `Data Tracking$`", SubType:=wdMergeSubTypeAccess
+        .Destination = wdSendToNewDocument
+        .SuppressBlankLines = True
+        With .DataSource
+            .FirstRecord = rownum - 1
+            .LastRecord = rownum - 1
+        End With
+        
+        .Execute Pause:=False
+    End With
+    
+    ffilename = StrPDFPath & "QC_S1806_" & PatientID1 & "_" & Replace(Range("M" & rownum), " ", "") & ".pdf"
+    
+    With wdApp.ActiveDocument
+        .SaveAs Filename:=ffilename, FileFormat:=wdFormatPDF, AddToRecentFiles:=False
+        .Close savechanges:=False
+    End With
+        
+
+If LastPatient <> PatientID1 Then
+    i = 1
+    Erase doclist
+    ReDim doclist(i)
+    doclist(i) = ffilename
+ElseIf LastPatient = PatientID1 Then
+    i = i + 1
+    ReDim Preserve doclist(i)
+    doclist(i) = ffilename
+End If
+
+'''''''''''''''''''''''''End Mailmerge'''''''''''''''''''''
+
+    
+        newbook.Activate                                                  'call up the contact list
+        ContactEmail = Contactmail(Ctep)
+        ThisWorkbook.Activate
+        
+        aEmail.Subject = "Data receipt confirmation for " & trial1 & " patient " & PatientID1
+        aEmail.To = ContactEmail
+        aEmail.CC = "SWOG1806@IROCOhio.org"
+        aEmail.Display
+    
+        For j = 1 To i
+         aEmail.Attachments.Add (doclist(j))
+        Next
+
+LastPatient = PatientID1
+If aEmail.To = "" Then
+            If counter = 0 Then
+                Workbooks.Open "Contacts_Master.xlsx" 'opens MasterList sheet to print new entry
+                Set AllContactTrials = Workbooks("Contacts_Master.xlsx")
+            End If
+                    
+                    AllContactTrials.Activate                                  'Activate the MasterList
+                        Cells.Find(What:="", _
+                            After:=Range("C1"), _
+                            LookAt:=xlPart, _
+                            LookIn:=xlFormulas, _
+                            SearchOrder:=xlByColumns, _
+                            SearchDirection:=xlNext, _
+                            MatchCase:=False).Activate                         'FIND blank cell
+                        scell = ActiveCell.Address                             'SAVE blank row location
+                        above = ActiveCell.Offset(-1, 0).Row                   'Find the row above
+                        Range(above & ":" & above).Copy                        'COPY it for its formatting
+                        Range(above & ":" & above).Insert Shift:=xlDown        'PASTE
+                        Application.CutCopyMode = False                        ' the excel squigly copy-lines
+                        Set scell = Range(scell)                               'make the cell in the new row an object
+                        scell.Offset(0, -2).Value = trial1                     'Trial
+                        scell.Offset(0, -1).Value = SiteName                   'Site
+                        scell.Value = Ctep                                     'CTEP ID
+                        Range("D" & scell.Row & ":I" & scell.Row & ", K" & scell.Row).Value = ""
+                        scell.Offset(0, 7).Value = "Yes"                       'Active ?
+                        
+                        
+                        
+End If
+Next
+
+'''''' CLOSE New sheet % UNHIDE
+        wdDoc.Close (savechanges = False)
+        wdApp.Quit
+        Application.DisplayAlerts = False                                     'Hold still, Excel.
+        newbook.Close                                                         'Close that reference sheet
+        Application.DisplayAlerts = True                                      'Good, Excel.
+        Application.ScreenUpdating = True                                     'Unhide the sheet
+
+
+
+    ''''''' Removes the added characters for the MM IV fix
+        If InStr(Range("AN" & rownum).Formula, "=""") = 1 Then
+                Range("AN" & rownum).Formula = Right(Left(Range("AN" & rownum).Formula, Len(Range("AN" & rownum).Formula) - 1), Len(Range("AN" & rownum).Formula) - 3)
+        End If
+        If InStr(1, Range("AO" & rownum).Formula, "=""") = 1 Then
+                Range("AO" & rownum).Formula = Right(Left(Range("AO" & rownum).Formula, Len(Range("AO" & rownum).Formula) - 1), Len(Range("AO" & rownum).Formula) - 3)
+        End If
+        ThisWorkbook.Save
+    '''''''
+    
+    
+End Sub
+
+Function Receipt_Email_Body(cell As Range)
+
+    Workbooks("Custom_Daily.xlsm").Activate
+    Dim SiteName As String
+
+    Dim rownum As Integer
+    Dim BodyText As String
+    Dim GreetingText As String
+    Dim SignatureText As String
+    Dim TimePoint As String
+    Dim Scan1 As String
+    Dim Scandate1 As Date
+    Dim Dtreceived As Date
+    Dim Dtreceived2 As Date
+    Dim Scan2 As String
+    Dim Scandate2 As Date
+    Dim Scan3 As String
+    Dim Scandate3 As Date
+    Dim Scan4 As String
+    Dim Scandate4 As Date
+    Dim QueryDate As Date
+    Dim MethodImg As String
+    Dim QueryText As String
+    
+    rownum = cell.Row
+    
+    If (Range("Y" & rownum).Value = "") Then
+        Dtreceived2 = CDate("1/1/1900")
+    Else
+        Dtreceived2 = Range("Y" & rownum).Value
+    End If
+    
+    RegDate = CDate(Range("I" & rownum).Value)
+    Dtreceived = Range("N" & rownum).Value
+    'Dtreceived2 = Range("P" & rownum).Value  kept for reference only
+    Scan1 = Range("O" & rownum).Value
+    Scanfov1 = Range("P" & rownum).Value
+    Scandate1 = Range("Q" & rownum).Value
+    Scan2 = Range("R" & rownum).Value
+    Scanfov2 = Range("S" & rownum).Value
+    Scandate2 = Range("T" & rownum).Value
+    Scan3 = Range("U" & rownum).Value
+    Scanfov3 = Range("V" & rownum).Value
+    Scandate3 = Range("W" & rownum).Value
+    TimePoint = Range("M" & rownum).Value
+    PatientID1 = Range("G" & rownum).Value
+    MethodImg = "TRIAD"
+    
+    
+    QueryText = "<br> <br>" & "<span style='background:yellow;mso-highlight:yellow'>" & "Could you please -" & "</span>"
+    trial1 = "S1806"
+    SiteName = Range("E" & rownum).Value
+    
+    GreetingText = "<p style='font-family:calibri;font-size:14.5'>" & "Hello all,<br><br>"
+    BodyText = "This email confirms the receipt of the following for " & trial1 & " patient " & PatientID1 & " (Reg. " & RegDate & ") from " & SiteName & " (" & Ctep & ") - " & "<br><br>"
+    
+    
+    If PatientID1 = LastPatient Then                                             'safeguard against sending hold over pt data in the variables to the wrong site
+        ScanText = ScanText & " "
+    Else
+        ScanText = ""
+    End If
+    
+    
+   If Scan1 <> "" Then
+        If Scandate1 <> 0 Then
+            ScanText = ScanText & TimePoint & " " & Scan1 & " " & Scanfov1 & " (scan dated " & Scandate1 & ")," & "<br>"
+        Else
+            ScanText = ScanText & "<b>" & TimePoint & " " & Scan1 & " " & Scanfov1 & " (scan not yet received)," & "</b><br>"
+        End If
+    End If
+    
+    If Scan2 <> "" Then
+        If Scandate2 <> 0 Then
+            ScanText = ScanText & TimePoint & " " & Scan2 & " " & Scanfov2 & " (scan dated " & Scandate2 & ")," & "<br>"
+        Else
+            ScanText = ScanText & "<b>" & TimePoint & " " & Scan2 & " " & Scanfov2 & " (scan not yet received)," & "</b><br>"
+        End If
+    End If
+
+    If Scan3 <> "" Then
+        If Scandate3 <> 0 Then
+            ScanText = ScanText & TimePoint & " " & Scan3 & " " & Scanfov3 & " (scan dated " & Scandate3 & ")," & "<br>"
+        Else
+            ScanText = ScanText & "<b>" & TimePoint & " " & Scan3 & " " & Scanfov3 & " (scan not yet received)," & "</b><br>"
+        End If
+    End If
+    
+    
+    If Dtreceived2 = CDate("1/1/1900") Then
+        BodyText = BodyText & ScanText & "<br>" & "images received via " & MethodImg & " on " & Dtreceived & "." & vbNewLine
+    Else
+        BodyText = BodyText & ScanText & "<br>" & "images received via " & MethodImg & " on " & Dtreceived & " and " & Dtreceived2 & "." & vbNewLine
+    End If
+        
+    SurveyText = "<br> <br> Thank you for submitting information to our <a href=""LINK_Retricted"">online survey</a>.<br>"
+    BodyText = BodyText & SurveyText
+    'If QueryDate <> CDate("1/1/1900") Then
+     '   BodyText = BodyText & QueryText
+    'End If
+    
+    BodyText = GreetingText & BodyText & IROCSignatures
+    
+    Receipt_Email_Body = BodyText
+      
+      
+
+    
+End Function
+
+Public Function Contactmail(Ctep)
+
+
+                ContactEmail = ""                                                 'blank previously saved email string
+                Err.Clear
+                Cells.Find(What:=Ctep, After:=Range("C1"), LookIn:=xlFormulas, LookAt _
+                :=xlPart, SearchOrder:=xlByColumns, SearchDirection:=xlNext, MatchCase:= _
+                False, SearchFormat:=False).Activate                                'searches reference sheet for first matching CTEP ID
+                
+                    firstcell = ActiveCell.Address                                  'establishes the first variable to fulfil the loop condition
+
+                    Do                                                              'Begin Loop
+                            Sitemail = ""                                           'blank last saved email address
+                    
+                            If Err.Number = 0 Then                                  'If you did find the CTEPID
+                               If ActiveCell.Offset(0, 7).Value <> "No" Then        '"Are we supposed to use the email?"
+                                 Sitemail = ActiveCell.Offset(0, 3).Value           '"Not No?" save email
+                               End If
+                               
+                               If ActiveCell.Offset(0, 7).Value = "No" Or ActiveCell.Offset(0, 7).Value = "no" Then       '"Are we supposed to use the email?"
+                                 Sitemail = ""                                      'Double check that no emails get through improper capitalization
+                               End If
+                            End If
+                            
+                                   Cells.Find(What:=Ctep, After:=ActiveCell, LookIn:=xlFormulas, LookAt _
+                                         :=xlPart, SearchOrder:=xlByRows, SearchDirection:=xlNext, MatchCase:= _
+                                         False, SearchFormat:=False).Activate        'searches reference sheet for first matching CTEP ID
+                                    nextcell = ActiveCell.Address                    'establishes the second variable to fulfil the loop condition
+                            
+                            If ContactEmail = "" Then                                '"Is this the first email?"
+                                ContactEmail = Sitemail                              '"Yes" then no semicolon
+                            Else                                                     '
+                                ContactEmail = ContactEmail & "; " & Sitemail        '"No" then add the new email after the old one w/ semicolon
+                            End If
+                    Loop Until firstcell = nextcell  'loop until the next cell is the first cell (which would be a hold over cell in the case of an error)
+                  Contactmail = ContactEmail
+                    
+End Function
